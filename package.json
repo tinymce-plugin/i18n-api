@@ -19,9 +19,16 @@
   ],
   "husky": {
     "hooks": {
-      "commit-msg": "commitlint -E HUSKY_GIT_PARAMS"
-    }  
-  },
+      "commit-msg": "commitlint -e $HUSKY_GIT_PARAMS",
+      "pre-commit": "lint-staged"
+    }
+ },
+ "lint-staged": {
+  "src/**/*.{js,ts}": [
+    "eslint --fix --ext .js,.vue",
+    "git add"
+  ]
+},
   "homepage": "https://github.com/tinymce-plugin/i18n-api",
   "devDependencies": {
     "@rollup/plugin-typescript": "^8.3.1",
@@ -38,6 +45,7 @@
     "@commitlint/config-conventional": "^17.0.3",
     "@vitalets/google-translate-api": "^8.0.0",
     "husky": "^8.0.1",
+    "lint-staged": "^13.0.3",
     "tinymce-plugin": "^0.0.3-beta.15"
   }
 }
