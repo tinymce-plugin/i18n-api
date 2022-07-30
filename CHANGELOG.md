@@ -1,5 +1,6 @@
 ## <small>0.0.3 (2022-07-30)</small>
 
+* fix(package.json): 🐛 更新程序入口 ([8ac6e03](https://github.com/tinymce-plugin/i18n-api/commit/8ac6e03))
 * chore: 更新 ([9530eab](https://github.com/tinymce-plugin/i18n-api/commit/9530eab))
 * chore: up ([e189c96](https://github.com/tinymce-plugin/i18n-api/commit/e189c96))
 * docs:  更新 ([bf58d35](https://github.com/tinymce-plugin/i18n-api/commit/bf58d35))

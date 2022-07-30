@@ -131,7 +131,7 @@ let translateData= [
 
 
 
-const translateCode = async(code,toCode,opt) => {
+const translateCode = async(code,toCode,opt={}) => {
     const res = await translate(toCode, {
         from: opt.from||"auto",
         to: code,
@@ -139,8 +139,8 @@ const translateCode = async(code,toCode,opt) => {
       });
       return  res.text
 }
-const tpI18nTranslate = (translateData, languages,opt)=>{
-  !languages&&(languages=defaultLanguages)
+const tpI18nTranslate = (translateData, opt={})=>{
+  const languages = opt?.languages?opt.languages : defaultLanguages
   // !langs&&(langs=defaultLangs)
 Promise.all(
   Object.keys(languages).map(async (code) => {
