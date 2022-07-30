@@ -5,7 +5,7 @@
   "main": "./src/index.ts",
   "module": "./src/index.ts",
   "scripts": {
-    "test": "node ./src/index.js",
+    "test": "node ./src/index.js"
   },
   "author": "Five(Li Hailong)",
   "license": "Apache-2.0",
@@ -15,7 +15,7 @@
     "tinymce-plugin"
   ],
   "files": [
-    "types"
+    "src"
   ],
   "husky": {
     "hooks": {
