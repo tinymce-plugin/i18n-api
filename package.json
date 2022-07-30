@@ -1,13 +1,13 @@
 {
   "name": "@tinymce-plugin/i18n-api",
   "private": false,
-  "version": "0.0.2",
-  "main": "./src/index.ts",
-  "module": "./src/index.ts",
+  "version": "0.0.3",
+  "main": "./src/index.js",
+  "module": "./src/index.js",
   "scripts": {
     "test": "node ./src/index.js",
     "lint:lint-staged": "lint-staged -c ./.husky/lintstagedrc.js",
-    "cm": "git-cz",
+    "cm": "git add . && git-cz",
     "changelog": "conventional-changelog -p custom-config -i CHANGELOG.md -s -r 0"
   },
   "author": "Five(Li Hailong)",
