@@ -1,0 +1,880 @@
+
+       ﻿<!DOCTYPE html>
+
+<html lang="zh-CN">
+
+<head>
+
+  <meta charset="UTF-8">
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <title>稳定版虚拟滚动树</title>
+
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
+
+  
+
+  <style>
+
+    .tree-container {
+
+      position: relative;
+
+      overflow: auto;
+
+      border: 1px solid #e2e8f0;
+
+      height: 600px;
+
+    }
+
+    .virtual-viewport {
+
+      position: absolute;
+
+      top: 0;
+
+      left: 0;
+
+      width: 100%;
+
+    }
+
+    .tree-node {
+
+      height: 40px;
+
+      display: flex;
+
+      align-items: center;
+
+      padding: 0 12px;
+
+      cursor: pointer;
+
+      box-sizing: border-box;
+
+    }
+
+    .tree-node:hover {
+
+      background-color: #f1f5f9;
+
+    }
+
+    .tree-node.active {
+
+      background-color: #dbeafe;
+
+      color: #2563eb;
+
+    }
+
+    .expand-btn {
+
+      width: 24px;
+
+      height: 24px;
+
+      display: inline-flex;
+
+      align-items: center;
+
+      justify-content: center;
+
+      cursor: pointer;
+
+      border: none;
+
+      background: transparent;
+
+      margin-right: 4px;
+
+    }
+
+    .loading-area {
+
+      height: 100%;
+
+      display: flex;
+
+      align-items: center;
+
+      justify-content: center;
+
+      color: #94a3b8;
+
+    }
+
+  </style>
+
+</head>
+
+<body class="p-6 bg-gray-50">
+
+  <div class="max-w-5xl mx-auto">
+
+    <h1 class="text-2xl font-bold mb-6">稳定版虚拟滚动树</h1>
+
+    
+
+    <div class="flex gap-4 mb-6">
+
+      <button id="generateData" class="bg-blue-600 text-white px-4 py-2 rounded">生成数据</button>
+
+      <button id="expandAll" class="bg-gray-200 px-4 py-2 rounded">全部展开</button>
+
+      <button id="collapseAll" class="bg-gray-200 px-4 py-2 rounded">全部折叠</button>
+
+    </div>
+
+    
+
+    <div class="bg-white p-4 mb-4 rounded shadow-sm">
+
+      <div class="flex flex-wrap gap-4 text-sm text-gray-600">
+
+        <d iv>总节点: <span id="totalCount">0</span></div>
+
+        <div>可见节点: <span id="visibleCount">0</span></div>
+
+        <div>已渲染: <span id="renderedCount">0</span></div>
+
+        <div>状态: <span id="status">就绪</span></div>
+
+      </div>
+
+    </div>
+
+    
+
+    <div id="treeContainer" class="tree-container">
+
+      <div id="virtualViewport" class="virtual-viewport"></div>
+
+    </div>
+
+  </div>
+
+
+
+  <script>
+
+    /* 
+
+    设计核心思路：
+
+    1. 稳定性优先：采用简化设计，避免过度优化导致的复杂问题
+
+    2. 操作互斥：使用全局锁机制防止并发操作冲突
+
+    3. 分批处理：节点渲染和数据处理采用分批方式，避免UI阻塞
+
+    4. 状态集中管理：所有核心状态保存在state对象中，保证数据一致性
+
+    5. 可视区域优化：只渲染用户可见及附近少量节点，平衡性能和体验
+
+    */
+
+    
+
+    // 全局状态管理对象 - 集中存储所有核心数据和状态
+
+    const state = {
+
+      treeData: [],               // 树形结构的根节点数组
+
+      nodeMap: new Map(),         // 节点ID到节点对象的映射，用于快速查找
+
+      visibleNodes: [],           // 当前可见的节点列表（展开状态下的节点）
+
+      nodeHeight: 40,             // 每个节点的固定高度(px)，简化计算
+
+      activeId: null,             // 当前选中节点的ID
+
+      isProcessing: false,        // 全局操作锁，防止并发操作导致的状态混乱
+
+      renderBatchSize: 50,        // 每次渲染的节点数量，避免一次渲染过多导致卡顿
+
+      lastScrollTop: 0            // 记录上次滚动位置，用于判断是否需要重新渲染
+
+    };
+
+
+
+    // DOM元素引用集合 - 集中管理所有需要操作的DOM元素
+
+    const elements = {
+
+      container: document.getElementById('treeContainer'),
+
+      viewport: document.getElementById('virtualViewport'),
+
+      generateBtn: document.getElementById('generateData'),
+
+      expandAllBtn: document.getElementById('expandAll'),
+
+      collapseAllBtn: document.getElementById('collapseAll'),
+
+      totalCount: document.getElementById('totalCount'),
+
+      visibleCount: document.getElementById('visibleCount'),
+
+      renderedCount: document.getElementById('renderedCount'),
+
+      status: document.getElementById('status')
+
+    };
+
+
+
+    /* 
+
+    安全更新函数 - 核心设计之一
+
+    作用：
+
+    1. 提供操作互斥机制，防止多个操作同时修改状态
+
+    2. 统一处理操作前后的状态提示
+
+    3. 确保异常情况下也能释放锁，避免系统卡死
+
+    */
+
+    function safeUpdate(fn) {
+
+      // 如果有操作正在进行，直接返回，防止并发冲突
+
+      if (state.isProcessing) return false;
+
+      
+
+      // 加锁并更新状态提示
+
+      state.isProcessing = true;
+
+      elements.status.textContent = "处理中...";
+
+      
+
+      try {
+
+        // 执行实际的更新操作
+
+        fn();
+
+        return true;
+
+      } finally {
+
+        // 无论操作成功与否，最终都释放锁并恢复状态提示
+
+        state.isProcessing = false;
+
+        elements.status.textContent = "就绪";
+
+      }
+
+    }
+
+
+
+    /* 
+
+    生成树形测试数据
+
+    设计思路：
+
+    1. 控制层级和节点数量，避免数据量过大导致性能问题
+
+    2. 为每个节点生成唯一ID，便于查找和管理
+
+    3. 记录节点的层级和父子关系，用于渲染时的缩进展示
+
+    4. 默认只展开第一层节点，减少初始渲染压力
+
+    */
+
+    function generateData(level = 0, parentId = null, maxLevel = 3) {
+
+      // 控制每层节点数量，层级越深节点越多，但总层级限制为3层
+
+      const counts = [5, 100, 500]; 
+
+      const count = counts[level] || 0;
+
+      
+
+      const nodes = [];
+
+      for (let i = 0; i < count; i++) {
+
+        // 生成唯一ID，根节点为"1,2,3..."，子节点为"父ID-1,父ID-2..."
+
+        const id = parentId ? `${parentId}-${i+1}` : `${i+1}`;
+
+        // 判断当前节点是否有子节点（不是最后一层）
+
+        const hasChildren = level < maxLevel - 1;
+
+        
+
+        // 创建节点对象
+
+        const node = {
+
+          id,
+
+          name: `节点 ${id}`,
+
+          level,               // 节点层级，用于计算缩进
+
+          parentId,            // 父节点ID，用于构建父子关系
+
+          hasChildren,         // 是否有子节点，用于显示展开/折叠按钮
+
+          expanded: level < 1, // 默认只展开第一层节点
+
+          children: []         // 子节点数组
+
+        };
+
+        
+
+        // 将节点加入映射表，便于快速查找
+
+        state.nodeMap.set(id, node);
+
+        
+
+        // 如果有子节点，递归生成子节点
+
+        if (hasChildren) {
+
+          node.children = generateData(level + 1, id, maxLevel);
+
+        }
+
+        
+
+        nodes.push(node);
+
+      }
+
+      
+
+      return nodes;
+
+    }
+
+
+
+    /* 
+
+    更新可见节点列表
+
+    设计思路：
+
+    1. 通过深度优先遍历，收集所有处于展开状态的节点
+
+    2. 只有父节点展开的情况下，子节点才会被视为可见
+
+    3. 同步更新统计信息和滚动区域总高度
+
+    */
+
+    function updateVisibleNodes() {
+
+      const visible = [];
+
+      
+
+      // 递归遍历节点，收集可见节点
+
+      function traverse(nodes) {
+
+        nodes.forEach(node => {
+
+          // 先将当前节点加入可见列表
+
+          visible.push(node);
+
+          // 如果节点处于展开状态且有子节点，继续遍历子节点
+
+          if (node.expanded && node.children.length) {
+
+            traverse(node.children);
+
+          }
+
+        });
+
+      }
+
+      
+
+      // 从根节点开始遍历
+
+      traverse(state.treeData);
+
+      // 更新可见节点列表
+
+      state.visibleNodes = visible;
+
+      
+
+      // 更新统计信息
+
+      elements.totalCount.textContent = state.nodeMap.size;
+
+      elements.visibleCount.textContent = visible.length;
+
+      
+
+      // 关键：更新滚动区域总高度，确保滚动条长度正确
+
+      elements.viewport.style.height = `${visible.length * state.nodeHeight}px`;
+
+    }
+
+
+
+    /* 
+
+    分批次渲染可见节点 - 虚拟滚动核心实现
+
+    设计思路：
+
+    1. 只渲染用户当前可见区域及附近少量节点，减少DOM元素数量
+
+    2. 通过计算滚动位置，确定需要渲染的节点范围
+
+    3. 分批次渲染节点，避免一次渲染过多导致UI阻塞
+
+    4. 使用transform定位可视区域，模拟整个列表的滚动效果
+
+    */
+
+    function renderVisibleNodes() {
+
+      // 获取容器高度和当前滚动位置
+
+      const containerHeight = elements.container.clientHeight;
+
+      const scrollTop = elements.container.scrollTop;
+
+      state.lastScrollTop = scrollTop;
+
+      
+
+      // 计算可视区域能显示的节点数量
+
+      const visibleCount = Math.ceil(containerHeight / state.nodeHeight);
+
+      // 计算当前滚动位置对应的起始节点索引
+
+      const startIndex = Math.floor(scrollTop / state.nodeHeight);
+
+      
+
+      // 预渲染区域：在可视区域上下各渲染30个节点，避免滚动时出现空白
+
+      const overscan = 30;
+
+      const renderStart = Math.max(0, startIndex - overscan);
+
+      const renderEnd = Math.min(state.visibleNodes.length, startIndex + visibleCount + overscan);
+
+      
+
+      // 清空当前视口内容
+
+      elements.viewport.innerHTML = '';
+
+      // 通过transform定位，使渲染的节点显示在正确位置
+
+      elements.viewport.style.transform = `translateY(${renderStart * state.nodeHeight}px)`;
+
+      
+
+      // 创建文档片段，减少DOM重绘次数
+
+      const fragment = document.createDocumentFragment();
+
+      
+
+      // 分批次渲染节点，避免长时间阻塞UI
+
+      let rendered = 0;
+
+      const totalToRender = renderEnd - renderStart;
+
+      
+
+      // 递归渲染批次函数
+
+      function renderBatch() {
+
+        // 计算本次渲染的结束位置
+
+        const end = Math.min(renderStart + rendered + state.renderBatchSize, renderEnd);
+
+        
+
+        // 渲染从当前位置到结束位置的节点
+
+        for (let i = renderStart + rendered; i < end; i++) {
+
+          const node = state.visibleNodes[i];
+
+          fragment.appendChild(createNodeElement(node));
+
+          rendered++;
+
+        }
+
+        
+
+        // 将渲染好的批次添加到DOM
+
+        elements.viewport.appendChild(fragment);
+
+        // 更新已渲染节点数量统计
+
+        elements.renderedCount.textContent = rendered;
+
+        
+
+        // 如果还有节点未渲染，继续渲染下一批次
+
+        if (rendered < totalToRender) {
+
+          requestAnimationFrame(renderBatch);
+
+        }
+
+      }
+
+      
+
+      // 开始第一批次渲染
+
+      renderBatch();
+
+    }
+
+
+
+    /* 
+
+    创建单个节点元素
+
+    设计思路：
+
+    1. 根据节点层级设置缩进，直观展示树形结构
+
+    2. 为有子节点的节点添加展开/折叠按钮
+
+    3. 为节点和按钮绑定事件，处理用户交互
+
+    4. 区分选中状态和普通状态的样式
+
+    */
+
+    function createNodeElement(node) {
+
+      const div = document.createElement('div');
+
+      // 设置节点样式，添加选中状态
+
+      div.className = `tree-node ${state.activeId === node.id ? 'active' : ''}`;
+
+      div.dataset.id = node.id;
+
+      // 根据节点层级设置左侧缩进，层级越深缩进越大
+
+      div.style.paddingLeft = `${node.level * 24}px`;
+
+      
+
+      // 如果节点有子节点，添加展开/折叠按钮
+
+      if (node.hasChildren) {
+
+        const btn = document.createElement('button');
+
+        btn.className = 'expand-btn';
+
+        // 根据节点展开状态显示不同图标
+
+        btn.innerHTML = `<i class="fa ${node.expanded ? 'fa-caret-down' : 'fa-caret-right'}"></i>`;
+
+        btn.onclick = (e) => {
+
+          // 阻止事件冒泡，避免触发节点点击事件
+
+          e.stopPropagation();
+
+          // 使用安全更新机制处理状态变化
+
+          safeUpdate(() => {
+
+            // 切换节点展开状态
+
+            node.expanded = !node.expanded;
+
+            // 更新可见节点列表
+
+            updateVisibleNodes();
+
+            // 重新渲染节点
+
+            renderVisibleNodes();
+
+          });
+
+        };
+
+        div.appendChild(btn);
+
+      } else {
+
+        // 没有子节点的节点，添加占位符保持对齐
+
+        const spacer = document.createElement('span');
+
+        spacer.style.display = 'inline-block';
+
+        spacer.style.width = '24px';
+
+        div.appendChild(spacer);
+
+      }
+
+      
+
+      // 添加节点文本
+
+      const text = document.createElement('span');
+
+      text.textContent = node.name;
+
+      div.appendChild(text);
+
+      
+
+      // 节点点击事件（选中节点）
+
+      div.onclick = () => {
+
+        safeUpdate(() => {
+
+          // 更新选中节点ID
+
+          state.activeId = node.id;
+
+          // 重新渲染以更新选中状态
+
+          renderVisibleNodes();
+
+        });
+
+      };
+
+      
+
+      return div;
+
+    }
+
+
+
+    /* 
+
+    全部展开/折叠功能
+
+    设计思路：
+
+    1. 递归遍历所有节点，统一设置展开/折叠状态
+
+    2. 使用安全更新机制确保操作互斥
+
+    3. 操作完成后更新可见节点并重新渲染
+
+    */
+
+    function setAllExpanded(expanded) {
+
+      safeUpdate(() => {
+
+        // 递归遍历所有节点
+
+        function traverse(nodes) {
+
+          nodes.forEach(node => {
+
+            if (node.hasChildren) {
+
+              // 设置节点展开/折叠状态
+
+              node.expanded = expanded;
+
+              // 递归处理子节点
+
+              traverse(node.children);
+
+            }
+
+          });
+
+        }
+
+        
+
+        // 从根节点开始遍历
+
+        traverse(state.treeData);
+
+        // 更新可见节点列表
+
+        updateVisibleNodes();
+
+        // 重新渲染节点
+
+        renderVisibleNodes();
+
+      });
+
+    }
+
+
+
+    /* 
+
+    绑定事件处理函数
+
+    设计思路：
+
+    1. 集中管理所有事件绑定，便于维护
+
+    2. 为生成数据、全部展开、全部折叠按钮绑定点击事件
+
+    3. 为滚动事件添加节流处理，减少不必要的渲染
+
+    */
+
+    function bindEvents() {
+
+      // 生成数据按钮点击事件
+
+      elements.generateBtn.addEventListener('click', () => {
+
+        safeUpdate(() => {
+
+          // 重置状态
+
+          state.treeData = [];
+
+          state.nodeMap.clear();
+
+          state.visibleNodes = [];
+
+          state.activeId = null;
+
+          
+
+          elements.status.textContent = "生成数据中...";
+
+          // 同步生成数据，确保数据完整性
+
+          state.treeData = generateData();
+
+          // 更新可见节点列表
+
+          updateVisibleNodes();
+
+          // 渲染节点
+
+          renderVisibleNodes();
+
+          elements.status.textContent = "就绪";
+
+        });
+
+      });
+
+      
+
+      // 全部展开按钮点击事件
+
+      elements.expandAllBtn.addEventListener('click', () => setAllExpanded(true));
+
+      // 全部折叠按钮点击事件
+
+      elements.collapseAllBtn.addEventListener('click', () => setAllExpanded(false));
+
+      
+
+      // 滚动事件处理（添加节流）
+
+      let scrollTimeout;
+
+      elements.container.addEventListener('scroll', () => {
+
+        // 清除之前的延迟渲染任务
+
+        clearTimeout(scrollTimeout);
+
+        // 延迟10ms执行渲染，减少滚动过程中的渲染次数
+
+        scrollTimeout = setTimeout(() => {
+
+          // 只有滚动超过2个节点高度时才重新渲染，减少不必要的渲染
+
+          if (Math.abs(elements.container.scrollTop - state.lastScrollTop) > state.nodeHeight * 2) {
+
+            renderVisibleNodes();
+
+          }
+
+        }, 10);
+
+      });
+
+    }
+
+
+
+    /* 
+
+    初始化函数
+
+    设计思路：
+
+    1. 作为程序入口，初始化必要的设置
+
+    2. 绑定所有事件处理函数
+
+    */
+
+    function init() {
+
+      bindEvents();
+
+    }
+
+
+
+    // 启动程序
+
+    init();
+
+  </script>
+
+</body>
+
+</html> 
